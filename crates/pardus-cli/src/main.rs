@@ -415,6 +415,35 @@ pub enum InteractAction {
         #[arg(long, default_value = "down")]
         direction: String,
     },
+
+    /// Dispatch an arbitrary DOM event on an element
+    DispatchEvent {
+        /// CSS selector of the target element
+        selector: String,
+        /// Event type (e.g., change, input, focus, blur, submit, custom)
+        event_type: String,
+        /// Event init options as JSON (e.g., {"bubbles":true,"detail":{}})
+        #[arg(long)]
+        init: Option<String>,
+    },
+
+    /// Upload files to a file input element
+    Upload {
+        /// CSS selector of the file input
+        selector: String,
+        /// File paths to upload
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+    },
+
+    /// Upload files to a file input by element ID
+    UploadId {
+        /// Element ID shown in the semantic tree
+        id: usize,
+        /// File paths to upload
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, ValueEnum)]

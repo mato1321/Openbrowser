@@ -518,6 +518,8 @@ fn extract_field_node(
                     max_val: None,
                     step_val: None,
                     autocomplete: None,
+                    accept: None,
+                    multiple: false,
                     children: child_nodes,
                 });
             }
@@ -548,12 +550,11 @@ fn extract_field_node(
         max_val: None,
         step_val: None,
         autocomplete: None,
+        accept: None,
+        multiple: false,
         children: Vec::new(),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Image extraction (metadata only — dimensions and format)
 // ---------------------------------------------------------------------------
 
 fn extract_images(bytes: &[u8]) -> Vec<SemanticNode> {
@@ -719,6 +720,8 @@ fn make_node(
         max_val: None,
         step_val: None,
         autocomplete: None,
+        accept: None,
+        multiple: false,
         children,
     }
 }

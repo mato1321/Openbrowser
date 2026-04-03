@@ -238,6 +238,8 @@ fn filter_interactive(tree: &pardus_core::SemanticTree) -> pardus_core::Semantic
         max_val: None,
         step_val: None,
         autocomplete: None,
+        accept: None,
+        multiple: false,
         children: vec![],
     });
 

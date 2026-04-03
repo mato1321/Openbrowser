@@ -123,6 +123,24 @@ fn node_description(node: &SemanticNode) -> String {
             }
             s
         }
+        SemanticRole::FileInput => {
+            let name = node.name.as_deref().unwrap_or("");
+            let mut s = if name.is_empty() {
+                format!("{id_prefix}fileinput")
+            } else {
+                format!("{id_prefix}fileinput  \"{name}\"")
+            };
+            if let Some(action) = &node.action {
+                s.push_str(&format!("  [action: {action}]"));
+            }
+            if let Some(accept) = &node.accept {
+                s.push_str(&format!("  [accept: {accept}]"));
+            }
+            if node.multiple {
+                s.push_str("  [multiple]");
+            }
+            s
+        }
         SemanticRole::Checkbox => {
             let name = node.name.as_deref().unwrap_or("");
             format!("{id_prefix}checkbox  \"{name}\"  [action: toggle]")

@@ -14,8 +14,13 @@ pub fn compute_fingerprint(
     resource_urls: &BTreeSet<String>,
 ) -> (Fingerprint, ViewStateId) {
     let parsed = Url::parse(page_url).ok();
-    let url_path = parsed.as_ref().map(|u| u.path().to_string()).unwrap_or_default();
-    let fragment = parsed.as_ref().and_then(|u| u.fragment().map(|f| f.to_string()));
+    let url_path = parsed
+        .as_ref()
+        .map(|u| u.path().to_string())
+        .unwrap_or_default();
+    let fragment = parsed
+        .as_ref()
+        .and_then(|u| u.fragment().map(|f| f.to_string()));
 
     let content_query_params = extract_content_params(parsed.as_ref());
 
@@ -42,7 +47,9 @@ pub fn discover_resources(html: &Html, base_url: &str) -> BTreeSet<String> {
 
 /// Extract query params that affect page content (pagination params).
 fn extract_content_params(url: Option<&Url>) -> BTreeMap<String, String> {
-    let Some(url) = url else { return BTreeMap::new() };
+    let Some(url) = url else {
+        return BTreeMap::new();
+    };
 
     let pagination_keys = ["page", "offset", "start", "p"];
     let mut params = BTreeMap::new();
@@ -94,6 +101,7 @@ fn role_str(role: &SemanticRole) -> String {
         SemanticRole::Link => "link".to_string(),
         SemanticRole::Button => "button".to_string(),
         SemanticRole::TextBox => "textbox".to_string(),
+        SemanticRole::FileInput => "fileinput".to_string(),
         SemanticRole::Checkbox => "checkbox".to_string(),
         SemanticRole::Radio => "radio".to_string(),
         SemanticRole::Combobox => "combobox".to_string(),
@@ -115,7 +123,11 @@ fn role_str(role: &SemanticRole) -> String {
 
 /// Hash a sorted set of resource URLs.
 fn hash_resource_set(resources: &BTreeSet<String>) -> String {
-    let concatenated: String = resources.iter().map(|u| u.as_str()).collect::<Vec<_>>().join("\n");
+    let concatenated: String = resources
+        .iter()
+        .map(|u| u.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let hash = blake3::hash(concatenated.as_bytes());
     hash.to_hex().to_string()
 }
@@ -152,8 +164,12 @@ mod tests {
 
     #[test]
     fn test_same_structure_same_hash() {
-        let t1 = build_tree(r#"<html><body><nav><a href="/x">A</a></nav><main><h1>Hello</h1></main></body></html>"#);
-        let t2 = build_tree(r#"<html><body><nav><a href="/x">B</a></nav><main><h1>World</h1></main></body></html>"#);
+        let t1 = build_tree(
+            r#"<html><body><nav><a href="/x">A</a></nav><main><h1>Hello</h1></main></body></html>"#,
+        );
+        let t2 = build_tree(
+            r#"<html><body><nav><a href="/x">B</a></nav><main><h1>World</h1></main></body></html>"#,
+        );
         // Same structure, different text → same hash
         assert_eq!(hash_tree_structure(&t1), hash_tree_structure(&t2));
     }
@@ -161,7 +177,9 @@ mod tests {
     #[test]
     fn test_different_structure_different_hash() {
         let t1 = build_tree(r#"<html><body><nav><a href="/x">A</a></nav></body></html>"#);
-        let t2 = build_tree(r#"<html><body><nav><a href="/x">A</a><a href="/y">B</a></nav></body></html>"#);
+        let t2 = build_tree(
+            r#"<html><body><nav><a href="/x">A</a><a href="/y">B</a></nav></body></html>"#,
+        );
         // Different structure (1 link vs 2 links)
         assert_ne!(hash_tree_structure(&t1), hash_tree_structure(&t2));
     }

@@ -1186,6 +1186,8 @@ fn build_handle_with_selector(el: &ElementRef, selector: String) -> ElementHandl
         label,
         input_type,
         value,
+        accept: None,
+        multiple: false,
     }
 }
 

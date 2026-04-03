@@ -27,6 +27,7 @@ pub struct FormDescriptor {
     pub id: Option<String>,
     pub action: Option<String>,
     pub method: String,
+    pub enctype: Option<String>,
     pub fields: Vec<FieldDescriptor>,
 }
 
@@ -140,6 +141,7 @@ impl NavigationGraph {
                 .unwrap_or_else(|| "GET".to_string());
 
             let id = form_el.value().attr("id").map(|s| s.to_string());
+            let enctype = form_el.value().attr("enctype").map(|s| s.to_string());
 
             let mut fields = Vec::new();
             for field_el in form_el.select(&*INPUT_SELECTOR) {
@@ -166,6 +168,7 @@ impl NavigationGraph {
                 id,
                 action,
                 method,
+                enctype,
                 fields,
             });
         }

@@ -13,6 +13,7 @@ use crate::interact::FormState;
 use crate::interact::ScrollDirection;
 use crate::tab::{Tab, TabId};
 use crate::tab::tab::TabConfig;
+use std::path::PathBuf;
 
 /// Navigation operations.
 #[async_trait::async_trait]
@@ -70,6 +71,12 @@ pub trait Interactor: Send + Sync {
 
     /// Select an option in a `<select>` element.
     fn select_option(&mut self, selector: &str, value: &str) -> anyhow::Result<InteractionResult>;
+
+    /// Upload files to a file input element.
+    fn upload(&mut self, selector: &str, paths: Vec<PathBuf>) -> anyhow::Result<InteractionResult>;
+
+    /// Upload files to a file input element by its element ID.
+    fn upload_by_id(&mut self, id: usize, paths: Vec<PathBuf>) -> anyhow::Result<InteractionResult>;
 }
 
 /// Tab lifecycle management.

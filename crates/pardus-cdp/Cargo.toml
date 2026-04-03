@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-pardus-core = { path = "../pardus-core", features = ["tls-pinning"] }
+pardus-core = { path = "../pardus-core", features = ["tls-pinning", "js"] }
 pardus-debug = { path = "../pardus-debug" }
 scraper = "0.22"
 tokio = { workspace = true }

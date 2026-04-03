@@ -69,6 +69,15 @@ fn node_description(node: &SemanticNode) -> String {
                 parts.push(format!("\"{name}\""));
             }
         }
+        SemanticRole::FileInput => {
+            parts.push("fileinput".to_string());
+            if let Some(name) = &node.name {
+                parts.push(format!("\"{name}\""));
+            }
+            if let Some(action) = &node.action {
+                parts.push(format!("[action: {action}]"));
+            }
+        }
         SemanticRole::StaticText => {
             if let Some(name) = &node.name {
                 parts.push(format!("text \"{name}\""));

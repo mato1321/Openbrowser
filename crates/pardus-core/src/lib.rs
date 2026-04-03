@@ -53,6 +53,7 @@ pub use output::tree_formatter::format_tree;
 pub use output::json_formatter::format_json;
 pub use output::llm_formatter::format_llm;
 pub use interact::{ElementHandle, FormState, InteractionResult, ScrollDirection};
+pub use interact::upload::{FileEntry, UploadError};
 #[cfg(feature = "js")]
 pub use interact::action_plan::{ActionPlan, ActionType, PageType, SuggestedAction};
 #[cfg(feature = "js")]

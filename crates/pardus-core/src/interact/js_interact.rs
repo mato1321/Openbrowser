@@ -634,6 +634,95 @@ pub async fn js_scroll(
     }
 }
 
+/// Dispatch an arbitrary DOM event on an element via the JS runtime.
+///
+/// Creates an `Event` (or `CustomEvent` if `detail` is provided in `event_init`)
+/// and calls `dispatchEvent` on the the element found by `selector`.
+/// Returns the modified DOM as a new page so the caller can inspect DOM changes.
+pub async fn js_dispatch_event(
+    page: &crate::Page,
+    selector: &str,
+    event_type: &str,
+    event_init: Option<&str>,
+) -> anyhow::Result<InteractionResult> {
+    let html = page.html.html();
+    let base_url = &page.base_url;
+
+    // Verify element exists
+    if let Ok(sel) = Selector::parse(selector) {
+        let doc = Html::parse_document(&html);
+        if doc.select(&sel).next().is_none() {
+            return Ok(InteractionResult::ElementNotFound {
+                selector: selector.to_string(),
+                reason: "no element matches selector".to_string(),
+            });
+        }
+    }
+
+    let selector_json =
+        serde_json::to_string(selector).unwrap_or_else(|_| format!("'{}'", selector));
+    let event_type_json =
+        serde_json::to_string(event_type).unwrap_or_else(|_| format!("'{}'", event_type));
+
+    // Build the EventInit dictionary from optional JSON string
+    let init_js = match event_init {
+        Some(json) => {
+            // If the init JSON contains a "detail" key, use CustomEvent
+            let uses_custom = json.contains("\"detail\"");
+            let constructor = if uses_custom { "CustomEvent" } else { "Event" };
+            format!(
+                "var initOpts = {}; try {{ initOpts = JSON.parse({}); }} catch(e) {{}} new {}({}, initOpts)",
+                "{}",
+                serde_json::to_string(json).unwrap_or_else(|_| "null".to_string()),
+                constructor,
+                event_type_json,
+            )
+        }
+        None => format!("new Event({}, {{ bubbles: true }})", event_type_json),
+    };
+
+    let interaction_js = format!(
+        r#"
+        (function() {{
+            var target = document.querySelector({selector_json});
+            if (!target) return;
+            var event = {init_js};
+            target.dispatchEvent(event);
+        }})();
+    "#,
+        selector_json = selector_json,
+        init_js = init_js,
+    );
+
+    let thread_result = execute_interaction_thread(
+        html,
+        base_url.clone(),
+        interaction_js,
+        INTERACTION_TIMEOUT_MS,
+        "PardusBrowser".to_string(),
+        None,
+    );
+
+    match thread_result {
+        Some(result) => {
+            match result.html {
+                Some(modified_html) => {
+                    let new_page = crate::Page::from_html(&modified_html, &page.url);
+                    Ok(InteractionResult::Navigated(new_page))
+                }
+                None => Ok(InteractionResult::ElementNotFound {
+                    selector: selector.to_string(),
+                    reason: "JS execution failed".to_string(),
+                }),
+            }
+        }
+        None => Ok(InteractionResult::EventDispatched {
+            selector: selector.to_string(),
+            event_type: event_type.to_string(),
+        }),
+    }
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -1112,7 +1201,7 @@ mod tests {
     // ==================== Navigation Detection Tests ====================
 
     #[test]
-    fn test_window_location_href_detection() {
+    fn test_window_location_href_detection_inline() {
         // Step 1: Test that inline handler with window.location.href fires
         let html = test_page_html(
             r#"<button id="btn" onclick="document.getElementById('out').textContent='fired'; window.location.href='/new-page'">Go</button><span id="out">waiting</span>"#
@@ -1229,5 +1318,103 @@ mod tests {
         let result = run_interaction(&html, interaction_js);
         assert!(result.is_some());
         assert!(result.unwrap().contains("content"));
+    }
+
+    // ==================== Event Dispatch Tests ====================
+
+    #[tokio::test]
+    async fn test_js_dispatch_change_event() {
+        let page = crate::Page::from_html(
+            r#"<html><head></head><body><input id="field" type="text" onchange="document.getElementById('out').textContent='changed'" /><span id="out">waiting</span></body></html>"#,
+            "https://example.com",
+        );
+
+        let result = js_dispatch_event(&page, "#field", "change", None).await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            InteractionResult::Navigated(new_page) => {
+                let html = new_page.html.html();
+                assert!(html.contains("changed"), "Expected 'changed' in output, got: {}", html);
+            }
+            other => panic!("Expected Navigated, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_js_dispatch_focus_event() {
+        let page = crate::Page::from_html(
+            r#"<html><head></head><body><input id="field" type="text" onfocus="document.getElementById('out').textContent='focused'" /><span id="out">blurred</span></body></html>"#,
+            "https://example.com",
+        );
+
+        let result = js_dispatch_event(&page, "#field", "focus", None).await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            InteractionResult::Navigated(new_page) => {
+                let html = new_page.html.html();
+                assert!(html.contains("focused"), "Expected 'focused' in output, got: {}", html);
+            }
+            other => panic!("Expected Navigated, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_js_dispatch_custom_event() {
+        let page = crate::Page::from_html(
+            r#"<html><head></head><body><div id="target"></div><script>document.getElementById('target').addEventListener('myevent', function(e) { document.getElementById('target').textContent = e.detail; });</script><span id="out">waiting</span></body></html>"#,
+            "https://example.com",
+        );
+
+        let init = r#"{"bubbles":true,"detail":"hello from custom"}"#;
+        let result = js_dispatch_event(&page, "#target", "myevent", Some(init)).await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            InteractionResult::Navigated(new_page) => {
+                let html = new_page.html.html();
+                assert!(
+                    html.contains("hello from custom"),
+                    "Expected custom event detail in output, got: {}",
+                    html
+                );
+            }
+            other => panic!("Expected Navigated, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_js_dispatch_event_element_not_found() {
+        let page = crate::Page::from_html(
+            "<html><head></head><body><div>content</div></body></html>",
+            "https://example.com",
+        );
+
+        let result = js_dispatch_event(&page, "#nonexistent", "click", None).await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            InteractionResult::ElementNotFound { selector, reason } => {
+                assert_eq!(selector, "#nonexistent");
+                assert!(reason.contains("no element matches"));
+            }
+            other => panic!("Expected ElementNotFound, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_js_dispatch_event_with_init_options() {
+        let page = crate::Page::from_html(
+            r#"<html><head></head><body><input id="field" type="text" onblur="document.getElementById('out').textContent='blurred'" /><span id="out">waiting</span></body></html>"#,
+            "https://example.com",
+        );
+
+        let init = r#"{"bubbles":true,"cancelable":true}"#;
+        let result = js_dispatch_event(&page, "#field", "blur", Some(init)).await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            InteractionResult::Navigated(new_page) => {
+                let html = new_page.html.html();
+                assert!(html.contains("blurred"), "Expected 'blurred' in output, got: {}", html);
+            }
+            other => panic!("Expected Navigated, got: {:?}", other),
+        }
     }
 }

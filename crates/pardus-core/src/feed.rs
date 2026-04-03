@@ -92,6 +92,8 @@ pub fn extract_feed_tree(bytes: &[u8]) -> anyhow::Result<(SemanticTree, Option<S
                 max_val: None,
                 step_val: None,
                 autocomplete: None,
+                accept: None,
+                multiple: false,
                 children: Vec::new(),
             };
             child_nodes.push(link_node);
@@ -226,11 +228,11 @@ fn make_node(
         max_val: None,
         step_val: None,
         autocomplete: None,
+        accept: None,
+        multiple: false,
         children,
     }
 }
-
-#[cfg(test)]
 mod tests {
     use super::*;
 

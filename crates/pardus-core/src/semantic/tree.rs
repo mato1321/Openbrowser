@@ -81,6 +81,12 @@ pub struct SemanticNode {
     /// The autocomplete attribute hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autocomplete: Option<String>,
+    /// The accept attribute for file inputs (e.g., "image/*,.pdf").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accept: Option<String>,
+    /// Whether the element has the multiple attribute (file inputs, selects).
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub multiple: bool,
     pub children: Vec<SemanticNode>,
 }
 
@@ -130,6 +136,7 @@ pub enum SemanticRole {
     Link,
     Button,
     TextBox,
+    FileInput,
     Checkbox,
     Radio,
     Combobox,
@@ -194,6 +201,7 @@ impl SemanticRole {
             Self::Link => "link",
             Self::Button => "button",
             Self::TextBox => "textbox",
+            Self::FileInput => "fileinput",
             Self::Checkbox => "checkbox",
             Self::Radio => "radio",
             Self::Combobox => "combobox",
@@ -307,6 +315,8 @@ fn make_static_text(content: &str) -> SemanticNode {
         max_val: None,
         step_val: None,
         autocomplete: None,
+        accept: None,
+        multiple: false,
         children: Vec::new(),
     }
 }
@@ -351,6 +361,8 @@ impl<'a> TreeBuilder<'a> {
             max_val: None,
             step_val: None,
             autocomplete: None,
+            accept: None,
+            multiple: false,
             children: Vec::new(),
         };
 
@@ -388,6 +400,15 @@ impl<'a> TreeBuilder<'a> {
         // Skip hidden elements
         if el.value().attr("hidden").is_some() || el.value().attr("aria-hidden") == Some("true") {
             return None;
+        }
+
+        // Skip hidden form inputs — they carry data, not UI
+        if tag_str == "input" {
+            if let Some(t) = el.value().attr("type") {
+                if t.eq_ignore_ascii_case("hidden") {
+                    return None;
+                }
+            }
         }
 
         // Handle iframe/frame elements
@@ -439,7 +460,11 @@ impl<'a> TreeBuilder<'a> {
         }
 
         // Update stats
-        if role.is_landmark() {
+        // Per ARIA spec: form and region are only landmarks when they have an accessible name
+        let is_named_form_or_region = matches!(role, SemanticRole::Form | SemanticRole::Region) && has_name;
+        let is_other_landmark = role.is_landmark()
+            && !matches!(role, SemanticRole::Form | SemanticRole::Region);
+        if is_other_landmark || is_named_form_or_region {
             self.stats.landmarks += 1;
         }
         if matches!(role, SemanticRole::Link) {
@@ -505,6 +530,12 @@ impl<'a> TreeBuilder<'a> {
         let max_val = el.value().attr("max").map(|s| s.to_string());
         let step_val = el.value().attr("step").map(|s| s.to_string());
         let autocomplete = el.value().attr("autocomplete").map(|s| s.to_string());
+        let accept = if tag_str == "input" && input_type.as_deref() == Some("file") {
+            el.value().attr("accept").map(|s| s.to_string())
+        } else {
+            None
+        };
+        let multiple = el.value().attr("multiple").is_some();
 
         // Extract select options
         let options = if tag_str == "select" {
@@ -550,6 +581,8 @@ impl<'a> TreeBuilder<'a> {
             max_val,
             step_val,
             autocomplete,
+            accept,
+            multiple,
             children: child_nodes,
         })
     }
@@ -624,11 +657,21 @@ impl<'a> TreeBuilder<'a> {
             max_val: None,
             step_val: None,
             autocomplete: None,
+            accept: None,
+            multiple: false,
             children: child_nodes,
         })
     }
 
     fn compute_name(&self, el: &ElementRef) -> Option<String> {
+        // aria-labelledby: resolve element IDs and concatenate their text
+        if let Some(ids) = el.value().attr("aria-labelledby") {
+            let text = self.resolve_aria_labelledby(ids);
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+
         // aria-label
         if let Some(label) = el.value().attr("aria-label") {
             let trimmed = label.trim().to_string();
@@ -749,6 +792,8 @@ impl<'a> TreeBuilder<'a> {
             "input" => match el.value().attr("type").unwrap_or("text") {
                 "checkbox" => SemanticRole::Checkbox,
                 "radio" => SemanticRole::Radio,
+                "file" => SemanticRole::FileInput,
+                "submit" | "reset" | "button" | "image" => SemanticRole::Button,
                 _ => SemanticRole::TextBox,
             },
             "select" => SemanticRole::Combobox,
@@ -816,6 +861,7 @@ impl<'a> TreeBuilder<'a> {
                 Some(match input_type {
                     "submit" | "reset" | "button" | "image" => "click".to_string(),
                     "checkbox" | "radio" => "toggle".to_string(),
+                    "file" => "upload".to_string(),
                     _ => "fill".to_string(),
                 })
             }
@@ -842,6 +888,23 @@ impl<'a> TreeBuilder<'a> {
             .map(|u| u.to_string())
             .unwrap_or_else(|_| href.to_string())
     }
+
+    /// Resolve `aria-labelledby` by looking up each referenced element ID
+    /// and concatenating their text content.
+    fn resolve_aria_labelledby(&self, ids: &str) -> String {
+        ids.split_whitespace()
+            .filter_map(|id| {
+                let sel = format!("#{}", css_escape_id(id));
+                Selector::parse(&sel).ok().and_then(|s| {
+                    self.html.select(&s).next().map(|el| {
+                        el.text().collect::<String>().trim().to_string()
+                    })
+                })
+            })
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 fn parse_role_str(s: &str) -> SemanticRole {
@@ -859,6 +922,7 @@ fn parse_role_str(s: &str) -> SemanticRole {
         "link" => SemanticRole::Link,
         "button" => SemanticRole::Button,
         "textbox" => SemanticRole::TextBox,
+        "fileinput" => SemanticRole::FileInput,
         "checkbox" => SemanticRole::Checkbox,
         "radio" => SemanticRole::Radio,
         "combobox" => SemanticRole::Combobox,

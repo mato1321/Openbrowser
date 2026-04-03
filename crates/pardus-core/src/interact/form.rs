@@ -7,12 +7,15 @@ use crate::app::App;
 use crate::page::Page;
 use crate::navigation::graph::FormDescriptor;
 use super::actions::InteractionResult;
+use super::upload::FileEntry;
 
 /// Accumulated form field values, keyed by field name.
 /// Built up via type() calls, then submitted via submit_form().
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct FormState {
     fields: HashMap<String, String>,
+    #[serde(skip)]
+    files: HashMap<String, Vec<FileEntry>>,
 }
 
 impl FormState {
@@ -62,6 +65,31 @@ impl FormState {
         } else {
             self.remove(name);
         }
+    }
+
+    /// Set files for a file input field.
+    pub fn set_files(&mut self, name: &str, files: Vec<FileEntry>) {
+        self.files.insert(name.to_string(), files);
+    }
+
+    /// Get files for a file input field.
+    pub fn get_files(&self, name: &str) -> Option<&Vec<FileEntry>> {
+        self.files.get(name)
+    }
+
+    /// Check if any files have been staged.
+    pub fn is_multipart(&self) -> bool {
+        !self.files.is_empty()
+    }
+
+    /// Get all file entries.
+    pub fn file_entries(&self) -> impl Iterator<Item = (&String, &Vec<FileEntry>)> {
+        self.files.iter()
+    }
+
+    /// Clear all files.
+    pub fn clear_files(&mut self) {
+        self.files.clear();
     }
 }
 
@@ -145,8 +173,13 @@ pub async fn submit_form(
     }
 
     // Build and send HTTP request
+    let needs_multipart = state.is_multipart()
+        || form_el.value().attr("enctype").map(|e| e == "multipart/form-data").unwrap_or(false);
+
     let new_page = if method == "GET" {
         submit_get(app, &action_url, &final_fields).await?
+    } else if needs_multipart {
+        submit_post_multipart(app, &action_url, &final_fields, &state.files).await?
     } else {
         submit_post_urlencoded(app, &action_url, &final_fields).await?
     };
@@ -168,7 +201,7 @@ fn collect_form_fields<'a>(form: &'a scraper::ElementRef<'a>) -> HashMap<String,
             };
 
             match input_type {
-                "submit" | "reset" | "button" | "image" => continue,
+                "submit" | "reset" | "button" | "image" | "file" => continue,
                 "checkbox" | "radio" => {
                     if el.value().attr("checked").is_some() {
                         let value = el.value().attr("value").unwrap_or("on").to_string();
@@ -278,6 +311,86 @@ async fn submit_post_urlencoded(
         "POST".to_string(),
         pardus_debug::ResourceType::Document,
         "document · form submission".to_string(),
+        final_url.clone(),
+        pardus_debug::Initiator::Other,
+    );
+    {
+        let mut log = app.network_log.lock().unwrap_or_else(|e| e.into_inner());
+        let mut r = record;
+        r.status = Some(status);
+        r.content_type = content_type.clone();
+        r.body_size = Some(body.len());
+        r.timing_ms = Some(timing_ms);
+        r.response_headers = response_headers_from_content_type(&content_type);
+        log.push(r);
+    }
+
+    crate::page::validate_content_type_pub(content_type.as_deref(), &final_url)?;
+    let html = scraper::Html::parse_document(&body);
+    let base_url = Page::extract_base_url_static(&html, &final_url);
+
+    Ok(Page {
+        url: final_url,
+        status,
+        content_type,
+        html,
+        base_url,
+        csp: None,
+        frame_tree: None,
+        cached_tree: None,
+    })
+}
+
+async fn submit_post_multipart(
+    app: &Arc<App>,
+    action_url: &str,
+    text_fields: &HashMap<String, String>,
+    files: &HashMap<String, Vec<FileEntry>>,
+) -> anyhow::Result<Page> {
+    use std::time::Instant;
+    let start = Instant::now();
+
+    let mut form = rquest::multipart::Form::new();
+
+    for (name, value) in text_fields {
+        form = form.text(name.clone(), value.clone());
+    }
+
+    for (field_name, file_entries) in files {
+        for file in file_entries {
+            let part = rquest::multipart::Part::bytes(file.content.clone())
+                .file_name(file.file_name.clone())
+                .mime_str(&file.mime_type)?;
+            form = form.part(field_name.clone(), part);
+        }
+    }
+
+    let response = app
+        .http_client
+        .post(action_url)
+        .multipart(form)
+        .send()
+        .await?;
+
+    let status = response.status().as_u16();
+    let final_url = response.url().to_string();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let body = response.text().await?;
+    let timing_ms = start.elapsed().as_millis();
+
+    let record = pardus_debug::NetworkRecord::fetched(
+        {
+            let log = app.network_log.lock().unwrap_or_else(|e| e.into_inner());
+            log.next_id()
+        },
+        "POST".to_string(),
+        pardus_debug::ResourceType::Document,
+        "document · multipart form submission".to_string(),
         final_url.clone(),
         pardus_debug::Initiator::Other,
     );

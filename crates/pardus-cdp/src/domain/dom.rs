@@ -13,6 +13,34 @@ fn resolve_target_id(session: &CdpSession) -> &str {
     session.target_id.as_deref().unwrap_or("default")
 }
 
+/// Parse target HTML into DomDocument, apply a mutation, serialize back.
+async fn mutate_dom<F>(
+    ctx: &DomainContext,
+    target_id: &str,
+    f: F,
+) -> HandleResult
+where
+    F: FnOnce(&mut pardus_core::js::dom::DomDocument, &NodeMap),
+{
+    let html_str = match ctx.get_html(target_id).await {
+        Some(h) => h,
+        None => return HandleResult::Ack,
+    };
+    let url = ctx.get_url(target_id).await.unwrap_or_default();
+
+    let mut doc = pardus_core::js::dom::DomDocument::from_html(&html_str);
+    let nm = ctx.node_map.lock().await;
+
+    f(&mut doc, &nm);
+
+    let new_html = doc.to_html();
+    let title = doc.get_title();
+    drop(nm);
+    ctx.update_target_with_data(target_id, url, new_html, Some(title));
+
+    HandleResult::Ack
+}
+
 #[async_trait(?Send)]
 impl CdpDomainHandler for DomDomain {
     fn domain_name(&self) -> &'static str {
@@ -201,23 +229,68 @@ impl CdpDomainHandler for DomDomain {
             }
             "setAttributeValue" => {
                 let node_id = params["nodeId"].as_i64().unwrap_or(-1);
-                let attr_name = params["name"].as_str().unwrap_or("");
-                let attr_value = params["value"].as_str().unwrap_or("");
-                let selector = {
-                    let nm = ctx.node_map.lock().await;
-                    nm.get_selector(node_id).map(|s| s.to_string())
-                };
-
-                if let Some(_sel) = selector {
-                    let _ = (attr_name, attr_value);
-                }
-
-                HandleResult::Ack
+                let attr_name = params["name"].as_str().unwrap_or("").to_string();
+                let attr_value = params["value"].as_str().unwrap_or("").to_string();
+                mutate_dom(ctx, target_id, |doc, nm| {
+                    if let Some(selector) = nm.get_selector(node_id) {
+                        if let Some(elem_id) = doc.query_selector(0, selector) {
+                            doc.set_attribute(elem_id, &attr_name, &attr_value);
+                        }
+                    }
+                }).await
             }
-            "removeAttribute" => HandleResult::Ack,
-            "removeNode" => HandleResult::Ack,
-            "setNodeValue" => HandleResult::Ack,
-            "setNodeName" => HandleResult::Ack,
+            "removeAttribute" => {
+                let node_id = params["nodeId"].as_i64().unwrap_or(-1);
+                let attr_name = params["name"].as_str().unwrap_or("").to_string();
+                mutate_dom(ctx, target_id, |doc, nm| {
+                    if let Some(selector) = nm.get_selector(node_id) {
+                        if let Some(elem_id) = doc.query_selector(0, selector) {
+                            doc.remove_attribute(elem_id, &attr_name);
+                        }
+                    }
+                }).await
+            }
+            "removeNode" => {
+                let node_id = params["nodeId"].as_i64().unwrap_or(-1);
+                mutate_dom(ctx, target_id, |doc, nm| {
+                    if let Some(selector) = nm.get_selector(node_id) {
+                        if let Some(elem_id) = doc.query_selector(0, selector) {
+                            if let Some(parent_id) = doc.get_parent(elem_id) {
+                                doc.remove_child(parent_id, elem_id);
+                            }
+                        }
+                    }
+                }).await
+            }
+            "setNodeValue" => {
+                let node_id = params["nodeId"].as_i64().unwrap_or(-1);
+                let value = params["value"].as_str().unwrap_or("").to_string();
+                mutate_dom(ctx, target_id, |doc, nm| {
+                    if let Some(selector) = nm.get_selector(node_id) {
+                        if let Some(elem_id) = doc.query_selector(0, selector) {
+                            // For text nodes discovered as children of elements
+                            let children = doc.get_children(elem_id);
+                            for &child_id in &children {
+                                if doc.get_node_type(child_id) == 3 {
+                                    doc.set_node_value(child_id, &value);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }).await
+            }
+            "setNodeName" => {
+                let node_id = params["nodeId"].as_i64().unwrap_or(-1);
+                let new_name = params["name"].as_str().unwrap_or("").to_string();
+                mutate_dom(ctx, target_id, |doc, nm| {
+                    if let Some(selector) = nm.get_selector(node_id) {
+                        if let Some(elem_id) = doc.query_selector(0, selector) {
+                            doc.set_node_name(elem_id, &new_name);
+                        }
+                    }
+                }).await
+            }
             "getBoxModel" => {
                 HandleResult::Success(serde_json::json!({
                     "model": {
@@ -273,7 +346,73 @@ impl CdpDomainHandler for DomDomain {
                 let body_id = nm.get_or_assign("body");
                 HandleResult::Success(serde_json::json!({ "nodeId": body_id }))
             }
-            "setFileInputFiles" => HandleResult::Ack,
+            "setFileInputFiles" => {
+                let node_id = params["backendNodeId"].as_i64()
+                    .or(params["nodeId"].as_i64())
+                    .unwrap_or(-1);
+
+                let selector = {
+                    let nm = ctx.node_map.lock().await;
+                    nm.get_selector(node_id).map(|s| s.to_string())
+                };
+
+                if let Some(selector) = selector {
+                    let (html_str, url) = (ctx.get_html(target_id).await, ctx.get_url(target_id).await);
+                    if let (Some(html_str), Some(url)) = (html_str, url) {
+                        let page = pardus_core::Page::from_html(&html_str, &url);
+                        if let Some(handle) = page.query(&selector) {
+                            if handle.input_type.as_deref() == Some("file") || handle.action.as_deref() == Some("upload") {
+                                let file_paths: Vec<std::path::PathBuf> = params["files"]
+                                    .as_array()
+                                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| std::path::PathBuf::from(s))).collect())
+                                    .unwrap_or_default();
+
+                                if file_paths.is_empty() {
+                                    return HandleResult::Error(CdpErrorResponse {
+                                        id: 0,
+                                        error: crate::error::CdpErrorBody {
+                                            code: INVALID_PARAMS,
+                                            message: "No files specified".to_string(),
+                                        },
+                                        session_id: None,
+                                    });
+                                }
+
+                                let max_size = 50 * 1024 * 1024;
+                                match pardus_core::interact::upload::upload_files(&page, &handle, &file_paths, max_size) {
+                                    Ok(files) => {
+                                        let file_names: Vec<&str> = files.iter().map(|f| f.file_name.as_str()).collect();
+                                        let count = file_names.len();
+                                        return HandleResult::Success(serde_json::json!({
+                                            "files": file_names,
+                                            "count": count,
+                                        }));
+                                    }
+                                    Err(e) => {
+                                        return HandleResult::Error(CdpErrorResponse {
+                                            id: 0,
+                                            error: crate::error::CdpErrorBody {
+                                                code: INVALID_PARAMS,
+                                                message: e.to_string(),
+                                            },
+                                            session_id: None,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HandleResult::Error(CdpErrorResponse {
+                    id: 0,
+                    error: crate::error::CdpErrorBody {
+                        code: INVALID_PARAMS,
+                        message: "Node is not a file input".to_string(),
+                    },
+                    session_id: None,
+                })
+            }
             "getFileInfo" => {
                 HandleResult::Error(CdpErrorResponse {
                     id: 0,
@@ -307,11 +446,51 @@ impl CdpDomainHandler for DomDomain {
                     "classNames": []
                 }))
             }
-            "copyTo" => HandleResult::Ack,
-            "moveTo" => HandleResult::Ack,
-            "undo" => HandleResult::Ack,
-            "redo" => HandleResult::Ack,
-            "markUndoableState" => HandleResult::Ack,
+            "copyTo" => {
+                let node_id = params["nodeId"].as_i64().unwrap_or(-1);
+                let target_parent_id = params["targetNodeId"].as_i64().unwrap_or(-1);
+                mutate_dom(ctx, target_id, |doc, nm| {
+                    let source = nm.get_selector(node_id)
+                        .and_then(|s| doc.query_selector(0, s));
+                    let parent = nm.get_selector(target_parent_id)
+                        .and_then(|s| doc.query_selector(0, s));
+                    if let (Some(src_id), Some(par_id)) = (source, parent) {
+                        doc.copy_to(src_id, par_id);
+                    }
+                }).await
+            }
+            "moveTo" => {
+                let node_id = params["nodeId"].as_i64().unwrap_or(-1);
+                let target_parent_id = params["targetNodeId"].as_i64().unwrap_or(-1);
+                let before_id = params["insertBeforeNodeId"].as_i64();
+                mutate_dom(ctx, target_id, |doc, nm| {
+                    let source = nm.get_selector(node_id)
+                        .and_then(|s| doc.query_selector(0, s));
+                    let parent = nm.get_selector(target_parent_id)
+                        .and_then(|s| doc.query_selector(0, s));
+                    let before = before_id
+                        .and_then(|id| nm.get_selector(id))
+                        .and_then(|s| doc.query_selector(0, s));
+                    if let (Some(src_id), Some(par_id)) = (source, parent) {
+                        doc.move_to(src_id, par_id, before);
+                    }
+                }).await
+            }
+            "undo" => {
+                mutate_dom(ctx, target_id, |doc, _nm| {
+                    doc.undo();
+                }).await
+            }
+            "redo" => {
+                mutate_dom(ctx, target_id, |doc, _nm| {
+                    doc.redo();
+                }).await
+            }
+            "markUndoableState" => {
+                mutate_dom(ctx, target_id, |doc, _nm| {
+                    doc.mark_undoable_state();
+                }).await
+            }
             "focus" => HandleResult::Ack,
             "getFlattenedDocument" => {
                 let (html_str, url) = (ctx.get_html(target_id).await, ctx.get_url(target_id).await);
