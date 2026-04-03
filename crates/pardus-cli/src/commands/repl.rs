@@ -178,6 +178,29 @@ pub async fn run_with_config(js: bool, format: OutputFormatArg, wait_ms: u32, pr
                     Err(e) => eprintln!("Error: {}", e),
                 }
             }
+            "event" => {
+                if tokens.len() < 3 {
+                    eprintln!("Usage: event <selector|#id> <event_type> [init_json]");
+                    continue;
+                }
+                let selector = &tokens[1];
+                let event_type = &tokens[2];
+                let init = tokens.get(3).cloned();
+                if let Some(id_str) = selector.strip_prefix('#') {
+                    match id_str.parse::<usize>() {
+                        Ok(id) => match browser.dispatch_event_by_id(id, event_type, init.as_deref()).await {
+                            Ok(result) => print_interaction_result(&result, &format),
+                            Err(e) => eprintln!("Error: {}", e),
+                        },
+                        Err(_) => eprintln!("Invalid element ID: {}", selector),
+                    }
+                } else {
+                    match browser.dispatch_event(selector, event_type, init.as_deref()).await {
+                        Ok(result) => print_interaction_result(&result, &format),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+            }
 
             // Screenshot (only available when compiled with --features screenshot)
             #[cfg(feature = "screenshot")]
@@ -453,6 +476,12 @@ fn print_interaction_result(
                     println!("{}", output);
                 }
             }
+        }
+        InteractionResult::EventDispatched { selector, event_type } => {
+            println!("Dispatched '{}' on {}", event_type, selector);
+        }
+        InteractionResult::FilesSet { selector, count } => {
+            println!("Set {} file(s) on {}", count, selector);
         }
     }
 }
@@ -748,6 +777,7 @@ fn print_help() {
     println!("  submit <sel> [k=v..] Submit a form");
     println!("  scroll [dir]         Scroll (down/up/to-top/to-bottom)");
     println!("  wait <sel> [timeout] Wait for element to appear");
+    println!("  event <sel> <type> [init]  Dispatch DOM event (e.g., event #1 change)");
     #[cfg(feature = "screenshot")]
     println!("  screenshot <path> [--full] [--element <sel>]");
     println!();

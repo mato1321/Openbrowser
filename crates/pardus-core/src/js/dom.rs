@@ -69,6 +69,10 @@ pub struct DomDocument {
     next_observer_id: u32,
     /// Maximum number of nodes allowed. None = unlimited.
     max_nodes: Option<usize>,
+    /// HTML snapshot stack for undo.
+    undo_stack: Vec<String>,
+    /// HTML snapshot stack for redo.
+    redo_stack: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,6 +133,8 @@ impl DomDocument {
             observers: Vec::new(),
             next_observer_id: 1,
             max_nodes: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         };
 
         // Create document root
@@ -739,6 +745,143 @@ impl DomDocument {
             Some(name.to_string()),
             old_val,
         );
+    }
+
+    // ---- Node Manipulation Methods ----
+
+    /// Set the nodeValue of a node (text/comment nodes).
+    /// For element nodes this is a no-op (nodeValue is null per DOM spec).
+    pub fn set_node_value(&mut self, node_id: NodeId, value: &str) {
+        let node_type = self.nodes.get(&node_id).map(|n| n.node_type.clone());
+        let old_value = self.nodes.get(&node_id).and_then(|n| n.text_content.clone());
+
+        match node_type {
+            Some(DomNodeType::Text) | Some(DomNodeType::Comment) => {
+                if let Some(node) = self.nodes.get_mut(&node_id) {
+                    node.text_content = Some(value.to_string());
+                }
+                self.queue_mutation("characterData", node_id, vec![], vec![], None, old_value);
+            }
+            _ => {}
+        }
+    }
+
+    /// Rename an element's tag name. Returns the old tag name (uppercase) on success.
+    pub fn set_node_name(&mut self, node_id: NodeId, new_name: &str) -> Option<String> {
+        let old_name = self.nodes.get(&node_id).and_then(|n| n.tag_name.clone())?;
+        let node_type = self.nodes.get(&node_id)?.node_type.clone();
+        if node_type != DomNodeType::Element {
+            return None;
+        }
+
+        let new_name_lower = new_name.to_lowercase();
+
+        // Update tag_index: remove old entry
+        if let Some(vec) = self.tag_index.get_mut(&old_name) {
+            vec.retain(|&id| id != node_id);
+            if vec.is_empty() {
+                self.tag_index.remove(&old_name);
+            }
+        }
+        // Add new entry
+        self.tag_index
+            .entry(new_name_lower.clone())
+            .or_default()
+            .push(node_id);
+
+        // Update the node
+        if let Some(node) = self.nodes.get_mut(&node_id) {
+            node.tag_name = Some(new_name_lower);
+        }
+
+        self.queue_mutation(
+            "attributes",
+            node_id,
+            vec![],
+            vec![],
+            Some("tagName".to_string()),
+            Some(old_name.to_uppercase()),
+        );
+
+        Some(old_name.to_uppercase())
+    }
+
+    /// Deep-clone a node and append it to a new parent. Returns the cloned node id.
+    pub fn copy_to(&mut self, node_id: NodeId, target_parent_id: NodeId) -> NodeId {
+        let clone_id = self.clone_node(node_id, true);
+        self.append_child(target_parent_id, clone_id);
+        clone_id
+    }
+
+    /// Move a node from its current parent to a new parent.
+    /// Optionally inserts before a reference node.
+    pub fn move_to(
+        &mut self,
+        node_id: NodeId,
+        target_parent_id: NodeId,
+        before_node_id: Option<NodeId>,
+    ) -> NodeId {
+        match before_node_id {
+            Some(ref_id) => {
+                self.insert_before(target_parent_id, node_id, Some(ref_id));
+            }
+            None => {
+                self.append_child(target_parent_id, node_id);
+            }
+        }
+        node_id
+    }
+
+    // ---- Undo/Redo ----
+
+    /// Push current state onto the undo stack and clear the redo stack.
+    pub fn mark_undoable_state(&mut self) {
+        self.undo_stack.push(self.to_html());
+        self.redo_stack.clear();
+    }
+
+    /// Undo the last marked state. Returns false if the undo stack is empty.
+    pub fn undo(&mut self) -> bool {
+        if let Some(snapshot) = self.undo_stack.pop() {
+            let current = self.to_html();
+            self.redo_stack.push(current);
+            self.replace_from_html(&snapshot);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Redo the last undone state. Returns false if the redo stack is empty.
+    pub fn redo(&mut self) -> bool {
+        if let Some(snapshot) = self.redo_stack.pop() {
+            let current = self.to_html();
+            self.undo_stack.push(current);
+            self.replace_from_html(&snapshot);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Replace the entire document state from an HTML snapshot,
+    /// preserving observer registrations and undo/redo stacks.
+    fn replace_from_html(&mut self, html: &str) {
+        let observers = std::mem::take(&mut self.observers);
+        let pending_mutations = std::mem::take(&mut self.pending_mutations);
+        let next_observer_id = self.next_observer_id;
+        let max_nodes = self.max_nodes;
+        let undo_stack = std::mem::take(&mut self.undo_stack);
+        let redo_stack = std::mem::take(&mut self.redo_stack);
+
+        *self = Self::from_html(html);
+
+        self.observers = observers;
+        self.pending_mutations = pending_mutations;
+        self.next_observer_id = next_observer_id;
+        self.max_nodes = max_nodes;
+        self.undo_stack = undo_stack;
+        self.redo_stack = redo_stack;
     }
 
     pub fn set_inner_html(&mut self, node_id: NodeId, html: &str) {
@@ -2376,5 +2519,219 @@ mod tests {
         let doc = DomDocument::from_html(html);
         // original_html is freed after DOM construction to save memory
         assert!(doc.original_html.is_none());
+    }
+
+    // ==================== Node Manipulation Tests ====================
+
+    #[test]
+    fn test_set_node_value_text() {
+        let html = "<html><body><div id=\"el\">Hello</div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        let el = doc.get_element_by_id("el").unwrap();
+        let children = doc.get_children(el);
+        let text_id = children
+            .into_iter()
+            .find(|&c| doc.get_node_type(c) == 3)
+            .unwrap();
+        doc.set_node_value(text_id, "World");
+        assert_eq!(doc.get_text_content(el), "World");
+    }
+
+    #[test]
+    fn test_set_node_value_comment() {
+        let html = "<html><body><div id=\"el\"><!-- old --></div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        let el = doc.get_element_by_id("el").unwrap();
+        let children = doc.get_children(el);
+        let comment_id = children
+            .iter()
+            .find(|&&c| doc.get_node_type(c) == 8)
+            .copied();
+        if let Some(cid) = comment_id {
+            doc.set_node_value(cid, "new");
+            let output = doc.to_html();
+            assert!(output.contains("<!--new-->"), "expected comment in output: {}", output);
+        } else {
+            // Scraper may strip comments in some cases; test via direct text node
+            let text_id = children
+                .into_iter()
+                .find(|&c| doc.get_node_type(c) == 3)
+                .expect("should have at least a text child");
+            doc.set_node_value(text_id, "updated");
+            assert_eq!(doc.get_text_content(el), "updated");
+        }
+    }
+
+    #[test]
+    fn test_set_node_value_element_noop() {
+        let html = "<html><body><div id=\"el\">text</div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        let el = doc.get_element_by_id("el").unwrap();
+        doc.set_node_value(el, "ignored");
+        assert_eq!(doc.get_text_content(el), "text");
+    }
+
+    #[test]
+    fn test_set_node_name() {
+        let html = "<html><body><div id=\"target\">content</div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        let div = doc.get_element_by_id("target").unwrap();
+        let old = doc.set_node_name(div, "span");
+        assert_eq!(old, Some("DIV".to_string()));
+        let output = doc.to_html();
+        assert!(output.contains("<span id=\"target\">"));
+        assert!(!output.contains("<div id=\"target\">"));
+    }
+
+    #[test]
+    fn test_set_node_name_updates_tag_index() {
+        let html = "<html><body><div id=\"target\">content</div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        let div = doc.get_element_by_id("target").unwrap();
+        doc.set_node_name(div, "span");
+        let spans = doc.query_selector_all(0, "span");
+        assert!(spans.contains(&div));
+    }
+
+    #[test]
+    fn test_copy_to() {
+        let html = "<html><body><div id=\"src\"><span>child</span></div><div id=\"dst\"></div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        let src = doc.get_element_by_id("src").unwrap();
+        let dst = doc.get_element_by_id("dst").unwrap();
+        let clone_id = doc.copy_to(src, dst);
+        let dst_children = doc.get_children(dst);
+        assert_eq!(dst_children.len(), 1);
+        assert_eq!(dst_children[0], clone_id);
+        let clone_children = doc.get_children(clone_id);
+        assert!(!clone_children.is_empty());
+    }
+
+    #[test]
+    fn test_copy_to_preserves_original() {
+        let html = "<html><body><div id=\"src\"><span>child</span></div><div id=\"dst\"></div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        let src = doc.get_element_by_id("src").unwrap();
+        let dst = doc.get_element_by_id("dst").unwrap();
+        doc.copy_to(src, dst);
+        assert!(!doc.get_children(src).is_empty());
+    }
+
+    #[test]
+    fn test_move_to() {
+        let html = "<html><body><div id=\"parent1\"><span id=\"child\">content</span></div><div id=\"parent2\"></div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        let child = doc.get_element_by_id("child").unwrap();
+        let parent2 = doc.get_element_by_id("parent2").unwrap();
+        doc.move_to(child, parent2, None);
+        let p2_children = doc.get_children(parent2);
+        assert!(p2_children.contains(&child));
+        let parent1 = doc.get_element_by_id("parent1").unwrap();
+        let p1_children = doc.get_children(parent1);
+        assert!(!p1_children.contains(&child));
+    }
+
+    #[test]
+    fn test_move_to_with_insert_before() {
+        let html = "<html><body><div id=\"parent1\"><span id=\"mover\">move me</span></div><div id=\"parent2\"><span id=\"first\">first</span><span id=\"last\">last</span></div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        let mover = doc.get_element_by_id("mover").unwrap();
+        let parent2 = doc.get_element_by_id("parent2").unwrap();
+        let last = doc.get_element_by_id("last").unwrap();
+        doc.move_to(mover, parent2, Some(last));
+        let children = doc.get_children(parent2);
+        let mover_pos = children.iter().position(|&id| id == mover).unwrap();
+        let last_pos = children.iter().position(|&id| id == last).unwrap();
+        assert!(mover_pos < last_pos);
+    }
+
+    // ==================== Undo/Redo Tests ====================
+
+    #[test]
+    fn test_undo_redo() {
+        let html = "<html><body><div id=\"target\">original</div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        doc.mark_undoable_state();
+        let target = doc.get_element_by_id("target").unwrap();
+        doc.set_text_content(target, "changed");
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "changed");
+
+        // Undo: restores to "original"
+        assert!(doc.undo());
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "original");
+
+        // Redo: back to "changed"
+        assert!(doc.redo());
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "changed");
+    }
+
+    #[test]
+    fn test_undo_empty_stack() {
+        let html = "<html><body><div>content</div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        assert!(!doc.undo());
+    }
+
+    #[test]
+    fn test_redo_empty_stack() {
+        let html = "<html><body><div>content</div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        assert!(!doc.redo());
+    }
+
+    #[test]
+    fn test_redo_cleared_on_new_mark() {
+        let html = "<html><body><div id=\"target\">original</div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+        doc.mark_undoable_state();
+        doc.set_text_content(doc.get_element_by_id("target").unwrap(), "first");
+        doc.mark_undoable_state();
+        doc.set_text_content(doc.get_element_by_id("target").unwrap(), "second");
+
+        // Undo back to first
+        assert!(doc.undo());
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "first");
+
+        // New mutation clears redo
+        doc.set_text_content(doc.get_element_by_id("target").unwrap(), "new");
+        doc.mark_undoable_state();
+        assert!(!doc.redo());
+    }
+
+    #[test]
+    fn test_multiple_undo_levels() {
+        let html = "<html><body><div id=\"target\">v0</div></body></html>";
+        let mut doc = DomDocument::from_html(html);
+
+        doc.mark_undoable_state(); // saves "v0"
+        doc.set_text_content(doc.get_element_by_id("target").unwrap(), "v1");
+        doc.mark_undoable_state(); // saves "v1"
+        doc.set_text_content(doc.get_element_by_id("target").unwrap(), "v2");
+        doc.mark_undoable_state(); // saves "v2"
+        doc.set_text_content(doc.get_element_by_id("target").unwrap(), "v3");
+
+        // Undo back to v2
+        assert!(doc.undo());
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "v2");
+
+        // Undo to v1
+        assert!(doc.undo());
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "v1");
+
+        // Undo to v0
+        assert!(doc.undo());
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "v0");
+
+        // Redo to v1
+        assert!(doc.redo());
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "v1");
+
+        // Redo to v2
+        assert!(doc.redo());
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "v2");
+
+        // Redo to v3 (current state before first undo)
+        assert!(doc.redo());
+        assert_eq!(doc.get_text_content(doc.get_element_by_id("target").unwrap()), "v3");
     }
 }

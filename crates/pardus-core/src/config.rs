@@ -292,6 +292,8 @@ pub struct BrowserConfig {
     pub dedup_window_ms: u64,
     /// Retry policy for transient HTTP failures (default: disabled).
     pub retry: RetryConfig,
+    /// Maximum file upload size in bytes (default: 50MB).
+    pub max_upload_size: usize,
 }
 
 impl BrowserConfig {
@@ -324,6 +326,7 @@ impl Default for BrowserConfig {
             max_iframe_depth: 5,
             dedup_window_ms: 0,
             retry: RetryConfig::default(),
+            max_upload_size: 50 * 1024 * 1024,
         }
     }
 }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use pardus_core::{BrowserConfig, FormState, InteractionResult, ScrollDirection};
@@ -71,6 +72,20 @@ pub async fn run_with_config(
                 _ => ScrollDirection::Down,
             };
             let result = browser.scroll(dir).await?;
+            output_result(&result, &format);
+        }
+        InteractAction::DispatchEvent { selector, event_type, init } => {
+            let result = browser.dispatch_event(&selector, &event_type, init.as_deref()).await?;
+            output_result(&result, &format);
+        }
+        InteractAction::Upload { selector, files } => {
+            let paths: Vec<PathBuf> = files.iter().map(|f| PathBuf::from(f)).collect();
+            let result = browser.upload(&selector, paths)?;
+            output_result(&result, &format);
+        }
+        InteractAction::UploadId { id, files } => {
+            let paths: Vec<PathBuf> = files.iter().map(|f| PathBuf::from(f)).collect();
+            let result = browser.upload_by_id(id, paths)?;
             output_result(&result, &format);
         }
     }
@@ -160,6 +175,12 @@ fn output_result(result: &InteractionResult, format: &OutputFormatArg) {
                     println!("{}", output);
                 }
             }
+        }
+        InteractionResult::EventDispatched { selector, event_type } => {
+            println!("Dispatched '{}' on {}", event_type, selector);
+        }
+        InteractionResult::FilesSet { selector, count } => {
+            println!("Set {} file(s) on {}", count, selector);
         }
     }
 }

@@ -26,6 +26,11 @@ pub enum InteractionResult {
         selector: String,
         value: String,
     },
+    /// Files set on a file input (local state).
+    FilesSet {
+        selector: String,
+        count: usize,
+    },
     /// Element not found or not interactable.
     ElementNotFound {
         selector: String,
@@ -41,6 +46,27 @@ pub enum InteractionResult {
         url: String,
         page: Page,
     },
+    /// Arbitrary event dispatched on an element.
+    EventDispatched {
+        selector: String,
+        event_type: String,
+    },
+}
+
+impl std::fmt::Debug for InteractionResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Navigated(_) => write!(f, "Navigated(..)"),
+            Self::Typed { selector, value } => f.debug_struct("Typed").field("selector", selector).field("value", value).finish(),
+            Self::Toggled { selector, checked } => f.debug_struct("Toggled").field("selector", selector).field("checked", checked).finish(),
+            Self::Selected { selector, value } => f.debug_struct("Selected").field("selector", selector).field("value", value).finish(),
+            Self::ElementNotFound { selector, reason } => f.debug_struct("ElementNotFound").field("selector", selector).field("reason", reason).finish(),
+            Self::WaitSatisfied { selector, found } => f.debug_struct("WaitSatisfied").field("selector", selector).field("found", found).finish(),
+            Self::Scrolled { url, .. } => f.debug_struct("Scrolled").field("url", url).finish_non_exhaustive(),
+            Self::EventDispatched { selector, event_type } => f.debug_struct("EventDispatched").field("selector", selector).field("event_type", event_type).finish(),
+            Self::FilesSet { selector, count } => f.debug_struct("FilesSet").field("selector", selector).field("count", count).finish(),
+        }
+    }
 }
 
 /// Type text into a form field.
@@ -298,4 +324,34 @@ fn is_checked(page: &Page, selector: &str) -> bool {
         .and_then(|sel| page.html.select(&sel).next())
         .map(|el| el.value().attr("checked").is_some())
         .unwrap_or(false)
+}
+
+/// Dispatch an arbitrary event on an element (non-JS mode).
+///
+/// Verifies the element exists and returns `EventDispatched`.
+/// Actual event handlers are not invoked in non-JS mode.
+pub fn dispatch_event(
+    page: &Page,
+    handle: &ElementHandle,
+    event_type: &str,
+) -> anyhow::Result<InteractionResult> {
+    // Verify the element exists
+    if let Ok(sel) = Selector::parse(&handle.selector) {
+        if page.html.select(&sel).next().is_none() {
+            return Ok(InteractionResult::ElementNotFound {
+                selector: handle.selector.clone(),
+                reason: "no element matches selector".to_string(),
+            });
+        }
+    } else {
+        return Ok(InteractionResult::ElementNotFound {
+            selector: handle.selector.clone(),
+            reason: "invalid selector".to_string(),
+        });
+    }
+
+    Ok(InteractionResult::EventDispatched {
+        selector: handle.selector.clone(),
+        event_type: event_type.to_string(),
+    })
 }

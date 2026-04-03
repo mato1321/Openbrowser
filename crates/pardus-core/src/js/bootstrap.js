@@ -112,6 +112,53 @@ class Element {
   set textContent(v) { Deno.core.ops.op_set_text_content(this.__nodeId, v); }
   get outerHTML() { return Deno.core.ops.op_get_inner_html(this.__nodeId); }
 
+  // ---- Form element properties (proxy via attributes) ----
+  get value() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'value') || ''; }
+  set value(v) { Deno.core.ops.op_set_attribute(this.__nodeId, 'value', String(v)); }
+  get checked() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'checked') !== null; }
+  set checked(v) {
+    if (v) { Deno.core.ops.op_set_attribute(this.__nodeId, 'checked', ''); }
+    else { Deno.core.ops.op_remove_attribute(this.__nodeId, 'checked'); }
+  }
+  get disabled() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'disabled') !== null; }
+  set disabled(v) {
+    if (v) { Deno.core.ops.op_set_attribute(this.__nodeId, 'disabled', ''); }
+    else { Deno.core.ops.op_remove_attribute(this.__nodeId, 'disabled'); }
+  }
+  get type() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'type') || ''; }
+  set type(v) { Deno.core.ops.op_set_attribute(this.__nodeId, 'type', String(v)); }
+  get placeholder() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'placeholder') || ''; }
+  set placeholder(v) { Deno.core.ops.op_set_attribute(this.__nodeId, 'placeholder', String(v)); }
+  get href() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'href') || ''; }
+  set href(v) { Deno.core.ops.op_set_attribute(this.__nodeId, 'href', String(v)); }
+  get src() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'src') || ''; }
+  set src(v) { Deno.core.ops.op_set_attribute(this.__nodeId, 'src', String(v)); }
+  get alt() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'alt') || ''; }
+  set alt(v) { Deno.core.ops.op_set_attribute(this.__nodeId, 'alt', String(v)); }
+  get action() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'action') || ''; }
+  get method() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'method') || 'GET'; }
+  get name() { return Deno.core.ops.op_get_attribute(this.__nodeId, 'name') || ''; }
+  set name(v) { Deno.core.ops.op_set_attribute(this.__nodeId, 'name', String(v)); }
+
+  // ---- Layout stubs (headless — no real layout engine) ----
+  get offsetWidth() { return 0; }
+  get offsetHeight() { return 0; }
+  get clientWidth() { return 0; }
+  get clientHeight() { return 0; }
+  get offsetLeft() { return 0; }
+  get offsetTop() { return 0; }
+  get scrollWidth() { return 0; }
+  get scrollHeight() { return 0; }
+  get scrollTop() { return 0; }
+  set scrollTop(_v) { /* no-op */ }
+  get scrollLeft() { return 0; }
+  set scrollLeft(_v) { /* no-op */ }
+  getBoundingClientRect() {
+    return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0,
+             toJSON: function() { return this; } };
+  }
+  getClientRects() { return []; }
+
   get children() {
     return Deno.core.ops.op_get_children(this.__nodeId).map(id => new Element(id));
   }
@@ -395,6 +442,26 @@ class Element {
   click() {
     const event = new Event('click', { bubbles: true, cancelable: true });
     this.dispatchEvent(event);
+  }
+
+  // Walk up the parent chain looking for a matching selector
+  closest(selector) {
+    let current = this;
+    while (current) {
+      try {
+        if (current.matches(selector)) return current;
+      } catch(e) { return null; }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  // Check if this element matches a CSS selector
+  matches(selector) {
+    const parent = this.parentElement;
+    if (!parent) return false;
+    const found = parent.querySelector(selector);
+    return found !== null && found.__nodeId === this.__nodeId;
   }
 }
 
@@ -1088,3 +1155,76 @@ if (typeof globalThis.queueMicrotask === 'undefined') {
     Promise.resolve().then(cb);
   };
 }
+
+// ==================== IntersectionObserver ====================
+// Stub that immediately reports all observed elements as visible.
+// Critical for lazy-loaded content (images, components).
+
+class IntersectionObserver {
+  constructor(callback, options) {
+    this.__callback = callback;
+    this.__options = options || {};
+    this.__targets = [];
+  }
+  observe(target) {
+    if (target && this.__targets.indexOf(target) < 0) {
+      this.__targets.push(target);
+      // Fire immediately — in a headless browser everything is "visible"
+      const entry = {
+        target: target,
+        isIntersecting: true,
+        intersectionRatio: 1,
+        boundingClientRect: target.getBoundingClientRect ? target.getBoundingClientRect() : { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0 },
+        intersectionRect: target.getBoundingClientRect ? target.getBoundingClientRect() : { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0 },
+        rootBounds: { top: 0, left: 0, bottom: 720, right: 1280, width: 1280, height: 720 },
+        time: Date.now()
+      };
+      const self = this;
+      Promise.resolve().then(function() {
+        try { self.__callback([entry], self); } catch(e) {}
+      });
+    }
+  }
+  unobserve(target) {
+    const idx = this.__targets.indexOf(target);
+    if (idx >= 0) this.__targets.splice(idx, 1);
+  }
+  disconnect() { this.__targets.length = 0; }
+  takeRecords() { return []; }
+}
+
+// ==================== ResizeObserver ====================
+class ResizeObserver {
+  constructor(callback) { this.__callback = callback; this.__targets = []; }
+  observe(target) {
+    if (target && this.__targets.indexOf(target) < 0) {
+      this.__targets.push(target);
+    }
+  }
+  unobserve(target) {
+    const idx = this.__targets.indexOf(target);
+    if (idx >= 0) this.__targets.splice(idx, 1);
+  }
+  disconnect() { this.__targets.length = 0; }
+}
+
+// ==================== CSS Utility ====================
+globalThis.CSS = {
+  supports: function(prop, value) {
+    if (arguments.length === 1) return false;
+    return false;
+  },
+  escape: function(s) { return s.replace(/[!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~]/g, '\\$&'); }
+};
+
+// ==================== Scroll APIs ====================
+window.scrollTo = function() {};
+window.scrollBy = function() {};
+window.scroll = function() {};
+Element.prototype.scrollIntoView = function() {};
+Element.prototype.scrollIntoViewIfNeeded = function() {};
+
+// ==================== Element.prototype extensions ====================
+Object.defineProperty(Element.prototype, 'nodeType', { value: 1 });
+Object.defineProperty(Element.prototype, 'ELEMENT_NODE', { value: 1 });
+Object.defineProperty(Element.prototype, 'TEXT_NODE', { value: 3 });

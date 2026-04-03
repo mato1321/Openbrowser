@@ -266,6 +266,8 @@ fn extract_result_url(result: &InteractionResult) -> (Option<String>, bool) {
         InteractionResult::Selected { .. } => (None, true),
         InteractionResult::WaitSatisfied { found, .. } => (None, *found),
         InteractionResult::ElementNotFound { reason: _, .. } => (None, false),
+        InteractionResult::EventDispatched { .. } => (None, true),
+        InteractionResult::FilesSet { .. } => (None, true),
     }
 }
 

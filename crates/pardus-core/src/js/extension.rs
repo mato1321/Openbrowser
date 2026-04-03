@@ -63,6 +63,15 @@ deno_core::extension!(
         op_take_mutation_records,
         op_has_observers,
         op_drain_pending_mutations,
+        // Node manipulation
+        op_set_node_value,
+        op_set_node_name,
+        op_copy_to,
+        op_move_to,
+        // Undo/Redo
+        op_mark_undoable_state,
+        op_undo,
+        op_redo,
         // SSE / EventSource
         op_sse_open,
         op_sse_close,

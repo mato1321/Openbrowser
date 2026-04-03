@@ -347,3 +347,51 @@ pub fn op_drain_pending_mutations(
     let dom = state.borrow::<Rc<RefCell<DomDocument>>>().clone();
     dom.borrow_mut().drain_all_pending_mutations()
 }
+
+// ==================== Node Manipulation Ops ====================
+
+#[op2(fast)]
+pub fn op_set_node_value(state: &mut OpState, node_id: u32, #[string] value: &str) {
+    let dom = state.borrow::<Rc<RefCell<DomDocument>>>().clone();
+    dom.borrow_mut().set_node_value(node_id, value);
+}
+
+#[op2]
+#[string]
+pub fn op_set_node_name(state: &mut OpState, node_id: u32, #[string] name: &str) -> Option<String> {
+    let dom = state.borrow::<Rc<RefCell<DomDocument>>>().clone();
+    dom.borrow_mut().set_node_name(node_id, name)
+}
+
+#[op2(fast)]
+pub fn op_copy_to(state: &mut OpState, node_id: u32, target_parent_id: u32) -> u32 {
+    let dom = state.borrow::<Rc<RefCell<DomDocument>>>().clone();
+    dom.borrow_mut().copy_to(node_id, target_parent_id)
+}
+
+#[op2(fast)]
+pub fn op_move_to(state: &mut OpState, node_id: u32, target_parent_id: u32, before_node_id: u32) -> u32 {
+    let dom = state.borrow::<Rc<RefCell<DomDocument>>>().clone();
+    let before = if before_node_id == 0 { None } else { Some(before_node_id) };
+    dom.borrow_mut().move_to(node_id, target_parent_id, before)
+}
+
+// ==================== Undo/Redo Ops ====================
+
+#[op2(fast)]
+pub fn op_mark_undoable_state(state: &mut OpState) {
+    let dom = state.borrow::<Rc<RefCell<DomDocument>>>().clone();
+    dom.borrow_mut().mark_undoable_state();
+}
+
+#[op2(fast)]
+pub fn op_undo(state: &mut OpState) -> bool {
+    let dom = state.borrow::<Rc<RefCell<DomDocument>>>().clone();
+    dom.borrow_mut().undo()
+}
+
+#[op2(fast)]
+pub fn op_redo(state: &mut OpState) -> bool {
+    let dom = state.borrow::<Rc<RefCell<DomDocument>>>().clone();
+    dom.borrow_mut().redo()
+}

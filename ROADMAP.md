@@ -1,6 +1,6 @@
 # Pardus Browser Roadmap
 
-**Version:** 0.4.0-dev | **Branch:** dev/roadmap | **Updated:** April 3, 2026
+**Version:** 0.4.0-dev | **Branch:** dev/roadmap | **Updated:** April 4, 2026
 
 ---
 
@@ -12,7 +12,7 @@ Core engine, CLI, and all major subsystems are stable. Summary of shipped featur
 |------|-----------|
 | **Semantic Engine** | ARIA role tree, navigation graph, element IDs (`[#N]`), action annotations (navigate/click/fill/toggle/select), interactive-only mode, 4 output formats (md, tree, json, llm) |
 | **Page Interaction** | Click, type, submit, wait-for-selector, scroll pagination, JS-level interaction (deno_core DOM), inline event handler registration, DOM mutation serialization |
-| **JavaScript** | V8 via deno_core, 35+ Rust DOM ops, thread-based timeouts, inline script execution, analytics/problematic script filtering |
+| **JavaScript** | V8 via deno_core, 42+ Rust DOM ops, thread-based timeouts, inline script execution, analytics/problematic script filtering |
 | **Security** | SSRF protection (private IPs, metadata endpoints, scheme blocking), Basic/Bearer auth, CSP parsing & enforcement, certificate pinning (SPKI hash + CA), sandbox mode (off/strict/moderate/minimal) |
 | **Session & Cache** | Cookie/localStorage/auth persistence, HTTP cache (RFC 7234: ETag, Last-Modified, 304), disk cache, shared HTTP client factory |
 | **Proxy** | HTTP/HTTPS/SOCKS5, per-command flags, env var support (HTTP_PROXY etc.), no-proxy exclusions |
@@ -27,6 +27,9 @@ Core engine, CLI, and all major subsystems are stable. Summary of shipped featur
 | **Adapters** | Playwright (Python + Node.js), Puppeteer (Node.js), Docker image with health check |
 | **CLI** | 8 subcommands (navigate, interact, serve, repl, tab, map, clean), rustyline REPL, verbose logging |
 | **Perf** | Connection pooling, HTTP/2 push simulation, configurable memory limits, ~200ms page parse |
+| **AI Agent Intelligence** | Action planning (page-type classification, suggested next actions), auto-form filling with validation, smart wait conditions (network idle, DOM stability, content mutations), session recording & replay (JSON serialization, deterministic replay) |
+| **Anti-bot Detection** | Challenge detection (reCAPTCHA, hCaptcha, Turnstile, JS challenges), risk scoring, human-in-the-loop resolution |
+| **Meta Refresh** | `<meta http-equiv="refresh">` parsing with delay, relative URLs, query params, fragments, base tag support, redirect depth limiting |
 
 ---
 
@@ -50,12 +53,12 @@ _(Currently empty)_
 
 ### AI Agent Intelligence
 
-- [ ] **Action planning** — Suggested next actions based on page state
-- [ ] **Auto-form filling** — AI-guided form completion with validation
-- [ ] **Smart wait conditions** — Wait for network idle, DOM stability, or content mutations instead of fixed timers
-- [ ] **Session recording & replay** — Serialize action sequences to JSON, replay deterministically
+- [x] **Action planning** — Suggested next actions based on page state
+- [x] **Auto-form filling** — AI-guided form completion with validation
+- [x] **Smart wait conditions** — Wait for network idle, DOM stability, or content mutations instead of fixed timers
+- [x] **Session recording & replay** — Serialize action sequences to JSON, replay deterministically
 - [ ] **Page diff** — Compare semantic trees between navigations; detect what changed (new elements, removed content, state transitions)
-- [ ] **Anti-bot detection hints** — Report Cloudflare/PerimeterX/DataDome challenges in semantic output so agents know they're blocked
+- [x] **Anti-bot detection hints** — Report Cloudflare/PerimeterX/DataDome challenges in semantic output so agents know they're blocked
 - [ ] **Login flow templates** — Declarative YAML/JSON descriptors for common auth patterns (email+password, SSO click-through, MFA TOTP)
 - [ ] **Content extraction** — Article/main-content extraction (Readability-style) stripping nav, ads, footers; output clean text for LLM ingestion
 - [ ] **Structured data extraction** — Detect and expose JSON-LD, Open Graph, microdata, RDFa from pages as typed Rust structs
@@ -75,7 +78,7 @@ _(Currently empty)_
 - [ ] **Cookie API in JS** — `document.cookie` getter/setter wired to the session cookie store
 - [ ] **localStorage/sessionStorage in JS** — Persistent and per-session storage backed by pardus-core session store
 - [ ] **MutationObserver shim** — Allow JS to observe DOM changes for SPA reactivity detection
-- [ ] **Event dispatch** — Allow agents to fire arbitrary DOM events (change, input, submit, custom) for frameworks that listen on native events
+- [x] **Event dispatch** — Allow agents to fire arbitrary DOM events (change, input, submit, custom) for frameworks that listen on native events
 
 ### Network & Protocol
 
@@ -91,12 +94,12 @@ _(Currently empty)_
 - [x] **PDF text extraction** — Parse PDF bytes to semantic tree with table, form-field (AcroForm), and image metadata extraction
 - [x] **RSS/Atom feed parsing** — Detect and parse RSS/Atom feed content into structured items (title, link, date, summary)
 - [ ] **Robots.txt parser** — Respect crawl directives; expose `is_allowed(url)` for the knowledge graph crawler
-- [ ] **Meta refresh & redirects** — Parse `<meta http-equiv="refresh">` and JS `location.href` assignments as navigations
+- [x] **Meta refresh & redirects** — Parse `<meta http-equiv="refresh">` and JS `location.href` assignments as navigations
 - [ ] **Content encoding** — Handle gzip/brotli/zstd transfer encodings beyond what reqwest provides automatically
 
 ### CDP Completeness
 
-- [ ] **DOM manipulation** — Implement stubbed methods: setNodeValue, setNodeName, removeAttribute, copyTo, moveTo, undo/redo
+- [x] **DOM manipulation** — Implement stubbed methods: setNodeValue, setNodeName, removeAttribute, copyTo, moveTo, undo/redo
 - [ ] **Input event dispatch** — Wire mouse/keyboard events through pardus-core interaction system (currently stubbed)
 - [ ] **File upload** — Implement DOM.setFileInputFiles for `<input type="file">` handling
 - [ ] **Network interception in CDP** — Fetch.enable / Fetch.requestPaused for request/response modification over CDP

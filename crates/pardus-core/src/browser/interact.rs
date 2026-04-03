@@ -1,5 +1,7 @@
 //! Page interaction operations: click, type, submit, scroll, etc.
 
+use std::path::PathBuf;
+
 use crate::interact::actions::InteractionResult;
 use crate::interact::{FormState, ScrollDirection};
 
@@ -191,5 +193,112 @@ impl Browser {
             self.form_state.set(name, value);
         }
         Ok(result)
+    }
+
+    /// Dispatch an arbitrary DOM event on an element.
+    ///
+    /// If JS is enabled, creates and dispatches the event in the V8 DOM,
+    /// executing any registered event handlers and returning the modified DOM.
+    /// Otherwise, validates the element exists and returns `EventDispatched`.
+    pub async fn dispatch_event(
+        &mut self,
+        selector: &str,
+        event_type: &str,
+        event_init: Option<&str>,
+    ) -> anyhow::Result<InteractionResult> {
+        #[cfg(feature = "js")]
+        if self.is_js_enabled() {
+            let page = self.require_active_page()?;
+            let result = crate::interact::js_interact::js_dispatch_event(
+                page, selector, event_type, event_init,
+            ).await?;
+            return self.apply_navigated_result(result);
+        }
+
+        let page = self.require_active_page()?;
+        let handle = page.query(selector).ok_or_else(|| {
+            anyhow::anyhow!("Element not found: {}", selector)
+        })?;
+        crate::interact::actions::dispatch_event(page, &handle, event_type)
+    }
+
+    /// Dispatch an arbitrary DOM event on an element by its element ID.
+    pub async fn dispatch_event_by_id(
+        &mut self,
+        id: usize,
+        event_type: &str,
+        event_init: Option<&str>,
+    ) -> anyhow::Result<InteractionResult> {
+        #[cfg(feature = "js")]
+        if self.is_js_enabled() {
+            let page = self.require_active_page()?;
+            let handle = page.find_by_element_id(id).ok_or_else(|| {
+                anyhow::anyhow!("Element with ID {} not found", id)
+            })?;
+            let selector = handle.selector.clone();
+            let result = crate::interact::js_interact::js_dispatch_event(
+                page, &selector, event_type, event_init,
+            ).await?;
+            return self.apply_navigated_result(result);
+        }
+
+        let page = self.require_active_page()?;
+        let handle = page.find_by_element_id(id).ok_or_else(|| {
+            anyhow::anyhow!("Element with ID {} not found", id)
+        })?;
+        crate::interact::actions::dispatch_event(page, &handle, event_type)
+    }
+
+    /// Upload files to a file input element.
+    ///
+    /// Files are read eagerly and stored in form state. When the form is
+    /// submitted, the request will use `multipart/form-data` encoding.
+    pub fn upload(&mut self, selector: &str, paths: Vec<PathBuf>) -> anyhow::Result<InteractionResult> {
+        if !self.config.sandbox.is_off() {
+            anyhow::bail!("file uploads are blocked in sandbox mode");
+        }
+
+        let page = self.require_active_page()?;
+        let handle = page.query(selector).ok_or_else(|| {
+            anyhow::anyhow!("Element not found: {}", selector)
+        })?;
+
+        let max_size = self.config.max_upload_size;
+        let files = crate::interact::upload::upload_files(page, &handle, &paths, max_size)?;
+
+        let count = files.len();
+        if let Some(ref name) = handle.name {
+            self.form_state.set_files(name, files);
+        }
+
+        Ok(InteractionResult::FilesSet {
+            selector: handle.selector.clone(),
+            count,
+        })
+    }
+
+    /// Upload files to a file input element by its element ID.
+    pub fn upload_by_id(&mut self, id: usize, paths: Vec<PathBuf>) -> anyhow::Result<InteractionResult> {
+        if !self.config.sandbox.is_off() {
+            anyhow::bail!("file uploads are blocked in sandbox mode");
+        }
+
+        let page = self.require_active_page()?;
+        let handle = page.find_by_element_id(id).ok_or_else(|| {
+            anyhow::anyhow!("Element with ID {} not found", id)
+        })?;
+
+        let max_size = self.config.max_upload_size;
+        let files = crate::interact::upload::upload_files(page, &handle, &paths, max_size)?;
+
+        let count = files.len();
+        if let Some(ref name) = handle.name {
+            self.form_state.set_files(name, files);
+        }
+
+        Ok(InteractionResult::FilesSet {
+            selector: handle.selector.clone(),
+            count,
+        })
     }
 }

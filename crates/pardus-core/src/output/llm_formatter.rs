@@ -272,6 +272,27 @@ fn collect_flat(
                 }
             }
         }
+        SemanticRole::FileInput => {
+            if node.is_interactive {
+                if let Some(id) = node.element_id {
+                    let name = node.name.as_deref().unwrap_or("");
+                    let mut s = format!("[#{}] file \"{}\"", id, name);
+                    if node.is_required {
+                        s.push_str(" [required]");
+                    }
+                    if let Some(accept) = &node.accept {
+                        s.push_str(&format!(" [accept: {}]", truncate(accept, 40)));
+                    }
+                    if node.multiple {
+                        s.push_str(" [multiple]");
+                    }
+                    if node.is_disabled {
+                        s.push_str(" [off]");
+                    }
+                    inputs.push(s);
+                }
+            }
+        }
         SemanticRole::Form => {
             let name = node.name.as_deref().unwrap_or("");
             let s = format!("form \"{}\" [{} fields]", name, count_inputs(node));
@@ -326,6 +347,7 @@ fn count_inputs(node: &SemanticNode) -> usize {
             | SemanticRole::Checkbox
             | SemanticRole::Radio
             | SemanticRole::Combobox
+            | SemanticRole::FileInput
     ) && node.is_interactive
     {
         count += 1;

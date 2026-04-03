@@ -17,7 +17,7 @@ pub struct ElementHandle {
     pub id: Option<String>,
     /// Element name attribute, if present.
     pub name: Option<String>,
-    /// The semantic action: "navigate", "click", "fill", "toggle", "select".
+    /// The semantic action: "navigate", "click", "fill", "toggle", "select", "upload".
     pub action: Option<String>,
     /// Whether the element is disabled.
     pub is_disabled: bool,
@@ -29,6 +29,10 @@ pub struct ElementHandle {
     pub input_type: Option<String>,
     /// The current value attribute, if present.
     pub value: Option<String>,
+    /// The accept attribute for file inputs (e.g., "image/*,.pdf").
+    pub accept: Option<String>,
+    /// Whether the element has the multiple attribute (file inputs).
+    pub multiple: bool,
 }
 
 /// Build a unique CSS selector for an element.
@@ -74,7 +78,10 @@ pub fn build_unique_selector(el: &ElementRef, html: &Html) -> String {
 }
 
 fn css_escape_id(id: &str) -> String {
-    if id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         id.to_string()
     } else {
         id.chars()
@@ -148,6 +155,8 @@ pub fn element_to_handle(el: &ElementRef, html: &Html) -> ElementHandle {
     let value = el.value().attr("value").map(|s| s.to_string());
     let id = el.value().attr("id").map(|s| s.to_string());
     let is_disabled = el.value().attr("disabled").is_some();
+    let accept = el.value().attr("accept").map(|s| s.to_string());
+    let multiple = el.value().attr("multiple").is_some();
 
     let action = compute_action(&tag, input_type.as_deref());
     let label = compute_label(&tag, el);
@@ -163,6 +172,8 @@ pub fn element_to_handle(el: &ElementRef, html: &Html) -> ElementHandle {
         label,
         input_type,
         value,
+        accept,
+        multiple,
     }
 }
 
@@ -172,10 +183,15 @@ pub fn compute_action(tag: &str, input_type: Option<&str>) -> Option<String> {
         "button" => Some("click".to_string()),
         "input" => {
             let itype = input_type.unwrap_or("text");
+            // Hidden inputs are not interactive
+            if itype.eq_ignore_ascii_case("hidden") {
+                return None;
+            }
             Some(
                 match itype {
                     "submit" | "reset" | "button" | "image" => "click",
                     "checkbox" | "radio" => "toggle",
+                    "file" => "upload",
                     _ => "fill",
                 }
                 .to_string(),
